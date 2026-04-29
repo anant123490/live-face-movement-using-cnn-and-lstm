@@ -9,6 +9,7 @@ __pycache__/
 ml/artifacts/
 ml/data/sample_images/
 ml/yolov8*.pt
+ml/.pip-tmp/
 
 # OS / editor
 .DS_Store
