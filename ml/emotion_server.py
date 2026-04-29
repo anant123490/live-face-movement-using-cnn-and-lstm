@@ -9,8 +9,10 @@ POST /predict (JSON):
   {"image": [[...], ...]}               # nested uint8 array (BGR or grayscale)
 
 Optional:
-  {"use_whole_frame": true}             # match naive snippet: grayscale entire frame -> 48x48
-                                         (default: largest Haar face crop when found)
+  {"use_whole_frame": true|false}       # true = same preprocessing as the common classroom snippet
+                                         # (BGR->gray, resize full frame to 48x48). false = Haar face crop when possible.
+                                         # If you omit this and send only {"image": [...]}, whole-frame mode is used
+                                         # so old clients match without changes. For {"image_b64": ...} the default is false.
 
 Requires: tensorflow, opencv-python-headless, flask, numpy
 """
@@ -141,13 +143,11 @@ def health():
     return jsonify({"status": "ok", "service": "emotion-only"})
 
 
-@app.route("/predict", methods=["OPTIONS"])
-def predict_options():
-    return "", 204
-
-
-@app.route("/predict", methods=["POST"])
+@app.route("/predict", methods=["POST", "OPTIONS"])
 def predict():
+    if request.method == "OPTIONS":
+        return "", 204
+
     try:
         model = _load_model()
     except FileNotFoundError as e:
@@ -158,7 +158,13 @@ def predict():
     if frame is None:
         return jsonify({"error": "Provide JSON with 'image_b64' or 'image' array."}), 400
 
-    use_whole = bool(data.get("use_whole_frame"))
+    if "use_whole_frame" in data:
+        use_whole = bool(data.get("use_whole_frame"))
+    elif isinstance(data.get("image"), list) and not isinstance(data.get("image_b64"), str):
+        # Match typical class snippets: request.json['image'] as nested uint8 array, full frame -> 48x48.
+        use_whole = True
+    else:
+        use_whole = False
     try:
         face_in = _frame_to_face_input(frame, use_whole_frame=use_whole)
         preds = model.predict(face_in, verbose=0)

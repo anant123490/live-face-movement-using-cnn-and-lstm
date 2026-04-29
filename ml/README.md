@@ -178,12 +178,16 @@ Dependencies (minimal): `flask`, `numpy`, `opencv-python-headless`, `tensorflow`
 ```bash
 pip install flask numpy opencv-python-headless tensorflow
 python emotion_server.py --model emotion_model.hdf5 --host 0.0.0.0 --port 5001
+# Same app, shorter command:
+python run_emotion_api.py --model emotion_model.hdf5 --host 0.0.0.0 --port 5000
 # Or: gunicorn -b 0.0.0.0:5001 emotion_wsgi:app
 ```
 
+This is the **runnable replacement** for a short classroom script (`Flask` + `load_model` + `POST /predict` with `request.json["image"]`). Put `emotion_model.hdf5` next to the app or pass `--model /path/to/emotion_model.hdf5`.
+
 - `GET /` → plain text: `Emotion Detection API Running`
 - `GET /health` → `{"status":"ok","service":"emotion-only"}`
-- `POST /predict` → JSON `{"image_b64":"..."}` or `{"image":[...]}`. Optional `"use_whole_frame": true` to mimic a naive full-frame resize (default uses Haar face crop when possible).
+- `POST /predict` → JSON `{"image":[...]}` (nested uint8, BGR or gray) and/or `{"image_b64":"..."}`. If you send **only** `image` as an array, preprocessing matches the usual snippet (full frame grayscale → 48×48). With **only** `image_b64`, the default is Haar face crop when a face is found. Override anytime with `"use_whole_frame": true|false`.
 
 ### Production setup (systemd + Nginx)
 
