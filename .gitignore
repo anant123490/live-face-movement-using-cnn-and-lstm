@@ -10,6 +10,8 @@ ml/artifacts/
 ml/data/sample_images/
 ml/yolov8*.pt
 ml/.pip-tmp/
+*.hdf5
+*.h5
 
 # OS / editor
 .DS_Store

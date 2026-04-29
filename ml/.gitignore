@@ -5,3 +5,5 @@ artifacts/
 data/sample_images/
 yolov8n.pt
 .pip-tmp/
+*.hdf5
+*.h5

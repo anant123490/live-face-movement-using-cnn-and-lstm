@@ -596,15 +596,24 @@ def video_feed():
     return Response(generate_frames(), mimetype="multipart/x-mixed-replace; boundary=frame")
 
 
-@app.route("/analyze_frame", methods=["POST"])
+@app.route("/analyze_frame", methods=["POST", "OPTIONS"])
 def analyze_frame():
+    if request.method == "OPTIONS":
+        return "", 204
+
     client_id = request.args.get("client_id", "browser")
 
     frame = None
-    if "frame" in request.files:
-        raw = request.files["frame"].read()
+    upload = request.files.get("frame") or request.files.get("file") or request.files.get("image")
+    if upload is not None and upload.filename not in (None, ""):
+        raw = upload.read()
         arr = np.frombuffer(raw, dtype=np.uint8)
         frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    elif upload is not None:
+        raw = upload.read()
+        if raw:
+            arr = np.frombuffer(raw, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     else:
         data = request.get_json(silent=True) or {}
         data_url = data.get("image")
@@ -629,9 +638,11 @@ def analyze_frame():
     return jsonify(payload)
 
 
-@app.route("/predict", methods=["POST"])
+@app.route("/predict", methods=["POST", "OPTIONS"])
 def predict():
     # Alias for `/analyze_frame` (frontend/backends often expect `/predict`)
+    if request.method == "OPTIONS":
+        return "", 204
     return analyze_frame()
 
 

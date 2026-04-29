@@ -8,6 +8,8 @@ from collections import Counter, deque
 import cv2
 import numpy as np
 import torch
+from werkzeug.exceptions import RequestEntityTooLarge
+
 from flask import Flask, jsonify, render_template, request
 from torchvision import transforms
 from ultralytics import YOLO
@@ -22,6 +24,30 @@ from src.utils.text import Vocabulary
 from src.utils.vision import enhance_frame, filter_small_boxes
 
 app = Flask(__name__)
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def _handle_upload_too_large(_e):
+    return (
+        jsonify(
+            {
+                "ok": False,
+                "error": "Request body too large. Send a smaller JPEG or set MAX_UPLOAD_MB / --max-upload-mb.",
+            }
+        ),
+        413,
+    )
+
+
+@app.after_request
+def _cors(response):
+    if app.config.get("ENABLE_CORS"):
+        response.headers["Access-Control-Allow-Origin"] = app.config.get("CORS_ORIGIN", "*")
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        response.headers["Access-Control-Max-Age"] = "86400"
+    return response
+
 
 WEARABLE_OBJECTS = {
     "backpack",
@@ -267,6 +293,88 @@ _last_caption_time_by_client = {}
 _last_caption_by_client = {}
 _history_by_client = {}
 
+_keras_emotion_lock = threading.Lock()
+_keras_emotion_model = None
+_keras_emotion_load_failed = False
+
+
+def _keras_emotion_labels():
+    raw = app.config.get("KERAS_EMOTION_LABELS")
+    if isinstance(raw, str) and raw.strip():
+        return [x.strip() for x in raw.split(",") if x.strip()]
+    return ["Angry", "Disgust", "Fear", "Happy", "Sad", "Surprise", "Neutral"]
+
+
+def _get_keras_emotion_model():
+    """Lazy-load optional Keras HDF5 emotion classifier (e.g. emotion_model.hdf5)."""
+    global _keras_emotion_model, _keras_emotion_load_failed
+    path = (app.config.get("KERAS_EMOTION_MODEL") or "").strip()
+    if not path:
+        return None
+    if _keras_emotion_load_failed:
+        return None
+    with _keras_emotion_lock:
+        if _keras_emotion_model is None and not _keras_emotion_load_failed:
+            try:
+                from tensorflow.keras.models import load_model as keras_load_model  # noqa: WPS433
+
+                if not os.path.exists(path):
+                    _keras_emotion_load_failed = True
+                    return None
+                _keras_emotion_model = keras_load_model(path)
+            except Exception:
+                _keras_emotion_model = None
+                _keras_emotion_load_failed = True
+                return None
+        return _keras_emotion_model
+
+
+def keras_predict_emotion(frame_bgr, face_cascade):
+    """
+    Match classic FER-style pipeline: largest Haar face -> 48x48 gray -> model.
+    Returns (label_or_status, confidence_or_None).
+    """
+    model = _get_keras_emotion_model()
+    if model is None:
+        return None, None
+    faces = detect_faces_in_frame(frame_bgr, face_cascade)
+    if len(faces) == 0:
+        return "No face detected", None
+    fx, fy, fw, fh = max(faces, key=lambda f: int(f[2]) * int(f[3]))
+    roi = frame_bgr[int(fy) : int(fy + fh), int(fx) : int(fx + fw)]
+    if roi.size == 0:
+        return None, None
+    if roi.ndim == 2:
+        gray = roi
+    else:
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    face = cv2.resize(gray, (48, 48))
+    face = face.astype(np.float32) / 255.0
+    face_in = np.reshape(face, (1, 48, 48, 1))
+    preds = model.predict(face_in, verbose=0)
+    logits = np.asarray(preds[0]).flatten()
+    idx = int(np.argmax(logits))
+    labels = _keras_emotion_labels()
+    if labels:
+        idx = min(idx, len(labels) - 1)
+        emotion = labels[idx]
+    else:
+        emotion = str(idx)
+    conf = float(np.max(logits))
+    return emotion, conf
+
+
+def _frame_from_json_image_array(arr):
+    """Build BGR frame from nested list (same idea as request.json['image'])."""
+    img = np.array(arr, dtype=np.uint8)
+    if img.size == 0:
+        return None
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    elif img.ndim == 3 and img.shape[2] == 4:
+        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+    return img
+
 
 def _truthy(value):
     if value is None:
@@ -482,6 +590,7 @@ def _analyze_frame(frame_bgr, client_id="default"):
                 "detected_counts": dict(item_counts),
                 "caption": cached_caption,
                 "face_emotion": None,
+                "keras_emotion": None,
             }
         )
 
@@ -523,6 +632,15 @@ def _analyze_frame(frame_bgr, client_id="default"):
 
     face_environment_text = build_face_environment_summary(len(faces), item_counts)
     face_emotion_text = format_emotion_summary(emotion_predictions)
+
+    keras_label, keras_conf = keras_predict_emotion(frame_bgr, bundle.face_cascade)
+    if keras_label is None:
+        keras_emotion_summary = "Keras: (model not configured)"
+    elif keras_conf is None:
+        keras_emotion_summary = f"Keras: {keras_label}"
+    else:
+        keras_emotion_summary = f"Keras: {keras_label} ({int(keras_conf * 100)}%)"
+
     nlp_report_text = build_nlp_report(
         cached_caption, person_text, surroundings_text, face_emotion_text, wearables_text
     )
@@ -532,9 +650,13 @@ def _analyze_frame(frame_bgr, client_id="default"):
         with _client_state_lock:
             if history:
                 history[-1]["face_emotion"] = face_emotion_text
+                history[-1]["keras_emotion"] = keras_emotion_summary
         detected_text = _smoothed_detected(history)
         cached_caption = _smoothed(history, "caption", fallback=cached_caption) or cached_caption
         face_emotion_text = _smoothed(history, "face_emotion", fallback=face_emotion_text) or face_emotion_text
+        keras_emotion_summary = (
+            _smoothed(history, "keras_emotion", fallback=keras_emotion_summary) or keras_emotion_summary
+        )
         scene_description_text = build_scene_description(cached_caption, movement_details)
         nlp_report_text = build_nlp_report(
             cached_caption, person_text, surroundings_text, face_emotion_text, wearables_text
@@ -594,8 +716,18 @@ def _analyze_frame(frame_bgr, client_id="default"):
     )
     cv2.putText(
         annotated,
-        f"Clothes/Accessories: {wearables_text[:70]}",
+        keras_emotion_summary[:75],
         (10, 175),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.52,
+        (180, 220, 255),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        annotated,
+        f"Clothes/Accessories: {wearables_text[:70]}",
+        (10, 205),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         (50, 220, 220),
@@ -612,6 +744,9 @@ def _analyze_frame(frame_bgr, client_id="default"):
         "surroundings_characteristics": surroundings_text,
         "face_environment": face_environment_text,
         "face_emotion": face_emotion_text,
+        "keras_emotion": keras_emotion_summary,
+        "keras_emotion_label": keras_label,
+        "keras_emotion_confidence": keras_conf,
         "nlp_report": nlp_report_text,
         "accuracy_mode": bool(accuracy_mode),
     }
@@ -630,18 +765,69 @@ def browser_cam():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify(
+        {
+            "status": "ok",
+            "service": "ml-camera-pipeline",
+            "docs": "/api",
+            "keras_emotion_configured": bool((app.config.get("KERAS_EMOTION_MODEL") or "").strip()),
+        }
+    )
 
 
-@app.route("/analyze_frame", methods=["POST"])
+@app.route("/api")
+def api_info():
+    """JSON discovery for clients (browser, EC2, mobile)."""
+    base = request.url_root.rstrip("/")
+    return jsonify(
+        {
+            "service": "ml-camera-pipeline",
+            "version": "1",
+            "endpoints": {
+                "ui": {"method": "GET", "path": "/", "description": "Browser webcam demo"},
+                "health": {"method": "GET", "path": "/health"},
+                "predict": {
+                    "method": "POST",
+                    "path": "/predict",
+                    "body": "multipart field 'frame' (JPEG) or JSON {image: data URL}; query ?client_id= & ?accuracy=1",
+                },
+                "analyze_frame": {
+                    "method": "POST",
+                    "path": "/analyze_frame",
+                    "body": "same as /predict",
+                },
+                "keras_emotion": {
+                    "method": "POST",
+                    "path": "/predict_keras_emotion",
+                    "body": "JSON {image_b64} or {image: nested array}",
+                },
+            },
+            "example_curl_predict": (
+                f'curl -X POST -F frame=@photo.jpg "{base}/predict?client_id=demo&accuracy=1"'
+            ),
+        }
+    )
+
+
+@app.route("/analyze_frame", methods=["POST", "OPTIONS"])
 def analyze_frame():
+    if request.method == "OPTIONS":
+        return "", 204
+
     client_id = request.args.get("client_id", "browser")
 
     frame = None
-    if "frame" in request.files:
-        raw = request.files["frame"].read()
+    upload = request.files.get("frame") or request.files.get("file") or request.files.get("image")
+    if upload is not None and upload.filename not in (None, ""):
+        raw = upload.read()
         arr = np.frombuffer(raw, dtype=np.uint8)
         frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    elif upload is not None:
+        # Some clients send a blob without a filename; still read the stream.
+        raw = upload.read()
+        if raw:
+            arr = np.frombuffer(raw, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     else:
         data = request.get_json(silent=True) or {}
         data_url = data.get("image")
@@ -655,25 +841,99 @@ def analyze_frame():
                 frame = None
 
     if frame is None:
-        return jsonify({"error": "No frame provided. Send multipart field 'frame' or JSON {image: dataURL}."}), 400
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "No frame provided. Send multipart field 'frame' or JSON {image: dataURL}.",
+                }
+            ),
+            400,
+        )
 
     try:
         annotated, payload = _analyze_frame(frame, client_id=client_id)
     except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception as e:
+        app.logger.exception("analyze_frame failed")
+        return jsonify({"ok": False, "error": str(e)}), 500
 
     ok, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
     if not ok:
-        return jsonify({"error": "Failed to encode annotated frame."}), 500
+        return jsonify({"ok": False, "error": "Failed to encode annotated frame."}), 500
 
+    payload["ok"] = True
     payload["annotated_jpeg_base64"] = base64.b64encode(buf.tobytes()).decode("ascii")
     return jsonify(payload)
 
 
-@app.route("/predict", methods=["POST"])
+@app.route("/predict", methods=["POST", "OPTIONS"])
 def predict():
     # Alias for `/analyze_frame` (frontend/backends often expect `/predict`)
+    if request.method == "OPTIONS":
+        return "", 204
     return analyze_frame()
+
+
+@app.route("/predict_keras_emotion", methods=["POST", "OPTIONS"])
+def predict_keras_emotion():
+    """
+    Standalone endpoint compatible with small JSON emotion APIs.
+
+    Body (JSON), either:
+      {"image": <nested uint8 array>}   # same idea as your sample (large payloads)
+      {"image_b64": "<jpeg base64>"}    # preferred for browsers
+
+    Response:
+      {"emotion": "<label>", "confidence": 0.0-1.0}  # confidence omitted if N/A
+    """
+    if request.method == "OPTIONS":
+        return "", 204
+    model = _get_keras_emotion_model()
+    if model is None:
+        return (
+            jsonify(
+                {
+                    "error": "Keras emotion model not configured. "
+                    "Set env KERAS_EMOTION_MODEL or pass --keras-emotion-model path "
+                    "(e.g. emotion_model.hdf5)."
+                }
+            ),
+            503,
+        )
+
+    data = request.get_json(silent=True) or {}
+    frame = None
+
+    if isinstance(data.get("image"), list):
+        frame = _frame_from_json_image_array(data["image"])
+    elif isinstance(data.get("image_b64"), str):
+        raw_b64 = data["image_b64"]
+        if "," in raw_b64:
+            raw_b64 = raw_b64.split(",", 1)[1]
+        try:
+            raw = base64.b64decode(raw_b64)
+            arr = np.frombuffer(raw, dtype=np.uint8)
+            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        except Exception:
+            frame = None
+
+    if frame is None:
+        return (
+            jsonify({"error": "Provide JSON {\"image\": nested array} or {\"image_b64\": \"...\"}."}),
+            400,
+        )
+
+    cascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    label, conf = keras_predict_emotion(frame, cascade)
+    if label is None:
+        return jsonify({"error": "Emotion inference failed."}), 500
+
+    out = {"emotion": label}
+    if conf is not None:
+        out["confidence"] = conf
+    return jsonify(out)
 
 
 def parse_args():
@@ -689,9 +949,35 @@ def parse_args():
     parser.add_argument("--accuracy-mode", action="store_true", default=_truthy(os.getenv("ACCURACY_MODE", "0")))
     parser.add_argument("--smooth-window", type=int, default=int(os.getenv("SMOOTH_WINDOW", "4")))
     parser.add_argument("--tracker", default=os.getenv("TRACKER", "bytetrack.yaml"))
+    parser.add_argument("--keras-emotion-model", default=os.getenv("KERAS_EMOTION_MODEL", ""))
+    parser.add_argument(
+        "--keras-emotion-labels",
+        default=os.getenv(
+            "KERAS_EMOTION_LABELS",
+            "Angry,Disgust,Fear,Happy,Sad,Surprise,Neutral",
+        ),
+    )
     parser.add_argument("--host", default=os.getenv("HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.getenv("PORT", "5000")))
-    return parser.parse_args()
+    parser.add_argument(
+        "--enable-cors",
+        action="store_true",
+        default=_truthy(os.getenv("ENABLE_CORS", "0")),
+        help="Send Access-Control-Allow-* headers (needed for some cross-origin setups).",
+    )
+    parser.add_argument(
+        "--cors-origin",
+        default=os.getenv("CORS_ORIGIN", "*"),
+        help='Access-Control-Allow-Origin value (default "*").',
+    )
+    parser.add_argument(
+        "--max-upload-mb",
+        type=int,
+        default=int(os.getenv("MAX_UPLOAD_MB", "25")),
+        help="Max request body size in MB (JPEG uploads / JSON).",
+    )
+    args, _unknown = parser.parse_known_args()
+    return args
 
 
 def configure_app(args):
@@ -706,6 +992,12 @@ def configure_app(args):
     app.config["ACCURACY_MODE"] = bool(args.accuracy_mode)
     app.config["SMOOTH_WINDOW"] = max(1, int(args.smooth_window))
     app.config["TRACKER"] = args.tracker
+    app.config["KERAS_EMOTION_MODEL"] = (args.keras_emotion_model or "").strip()
+    app.config["KERAS_EMOTION_LABELS"] = (args.keras_emotion_labels or "").strip()
+    app.config["ENABLE_CORS"] = bool(args.enable_cors)
+    app.config["CORS_ORIGIN"] = (args.cors_origin or "*").strip() or "*"
+    max_mb = max(1, int(getattr(args, "max_upload_mb", 25)))
+    app.config["MAX_CONTENT_LENGTH"] = max_mb * 1024 * 1024
 
 
 if __name__ == "__main__":

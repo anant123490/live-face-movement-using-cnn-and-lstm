@@ -117,8 +117,8 @@
     <h1>Browser Camera Feed + ML Analysis</h1>
     <div class="hint">
       This uses your browser’s webcam, then sends frames to the backend for ML (YOLO + captioning + face emotion + movement/clothes).
-      Browser camera access requires <code>https://</code> or <code>http://localhost</code>. If you opened this with <code>127.0.0.1</code> and the camera won’t start, open
-      <code>http://localhost:5000/</code> instead.
+      Camera + <code>fetch()</code> must be same-origin as this page. Use the URL shown in your address bar (e.g. <code>http://127.0.0.1:5000/</code> or <code>http://localhost:5000/</code>).
+      If the camera is blocked, try <code>http://localhost:…</code> or HTTPS. ML requests go to <code>{{ url_for('predict') }}</code> on this host.
     </div>
     <div id="env" class="hint" style="margin-top: 8px"></div>
     <div style="height: 12px"></div>
@@ -207,6 +207,10 @@
               <div class="value" id="face_emotion">-</div>
             </div>
             <div>
+              <div class="label">Keras emotion (HDF5, optional)</div>
+              <div class="value" id="keras_emotion">-</div>
+            </div>
+            <div>
               <div class="label">NLP Scene Report</div>
               <div class="value" id="nlp_report">-</div>
             </div>
@@ -241,12 +245,15 @@
     const surroundingsEl = document.getElementById("surroundings_characteristics");
     const faceEnvEl = document.getElementById("face_environment");
     const faceEmotionEl = document.getElementById("face_emotion");
+    const kerasEmotionEl = document.getElementById("keras_emotion");
     const nlpReportEl = document.getElementById("nlp_report");
 
     let currentStream = null;
     let analyzeTimer = null;
     let analyzing = false;
     const clientId = (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now())) + "-" + Math.random().toString(16).slice(2);
+    /** Same-origin URL from Flask (correct if the app is mounted under a path prefix, e.g. behind Nginx). */
+    const predictPath = {{ url_for("predict") | tojson }};
 
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: false });
@@ -344,10 +351,17 @@
         fd.append("frame", blob, "frame.jpg");
 
         const t0 = performance.now();
-        const accuracyParam = accuracyToggle && accuracyToggle.checked ? "&accuracy=1" : "";
-        const resp = await fetch(`/predict?client_id=${encodeURIComponent(clientId)}${accuracyParam}`, {
+        const predictUrl = new URL(predictPath, window.location.href);
+        predictUrl.searchParams.set("client_id", clientId);
+        if (accuracyToggle && accuracyToggle.checked) {
+          predictUrl.searchParams.set("accuracy", "1");
+        }
+
+        const resp = await fetch(predictUrl.toString(), {
           method: "POST",
-          body: fd
+          body: fd,
+          credentials: "same-origin",
+          cache: "no-store"
         });
         const t1 = performance.now();
 
@@ -379,6 +393,7 @@
         surroundingsEl.textContent = data.surroundings_characteristics || "-";
         faceEnvEl.textContent = data.face_environment || "-";
         faceEmotionEl.textContent = data.face_emotion || "-";
+        kerasEmotionEl.textContent = data.keras_emotion || "-";
         nlpReportEl.textContent = data.nlp_report || "-";
 
         setStatus(`live (analyze ${(t1 - t0).toFixed(0)}ms)`);
@@ -423,6 +438,11 @@
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
         currentStream = stream;
         video.srcObject = stream;
+        try {
+          await video.play();
+        } catch (playErr) {
+          console.warn("video.play()", playErr);
+        }
 
         startBtn.disabled = true;
         stopBtn.disabled = false;
@@ -464,9 +484,9 @@
           `Origin: ${location.origin} | Secure context: ${window.isSecureContext ? "yes" : "no"} | ` +
           `mediaDevices: ${navigator.mediaDevices ? "yes" : "no"}`;
 
-        if (!window.isSecureContext && location.hostname !== "localhost") {
+        if (!window.isSecureContext && !["localhost", "127.0.0.1", "[::1]"].includes(location.hostname)) {
           setError(
-            "Camera blocked by browser security. Open this page as http://localhost:5000/ (or use HTTPS)."
+            "Camera may be blocked: use http://localhost, http://127.0.0.1, or HTTPS for this origin."
           );
         }
         await listCameras();

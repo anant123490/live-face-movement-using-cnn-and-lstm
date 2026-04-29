@@ -13,7 +13,7 @@ Environment="SMOOTH_WINDOW=4"
 Environment="DET_CONF=0.45"
 Environment="DET_IOU=0.45"
 Environment="IMG_SIZE=960"
-ExecStart=/home/ubuntu/ml/.venv/bin/gunicorn -c /home/ubuntu/ml/gunicorn.conf.py app:app
+ExecStart=/home/ubuntu/ml/.venv/bin/gunicorn -c /home/ubuntu/ml/gunicorn.conf.py wsgi:app
 Restart=always
 RestartSec=3
 

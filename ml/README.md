@@ -132,11 +132,15 @@ Use the new entrypoint `app.py`:
 python app.py --weights artifacts/caption_model.pt --vocab artifacts/vocab.json --host 0.0.0.0 --port 5000
 ```
 
-Or with Gunicorn:
+Or with Gunicorn (loads `wsgi.py`, which applies weights/vocab from env or CLI — safe with Gunicorn’s own flags via `parse_known_args`):
 
 ```bash
-gunicorn -c gunicorn.conf.py app:app
+gunicorn -c gunicorn.conf.py wsgi:app
 ```
+
+- **API discovery**: `GET /api` — JSON list of routes and a sample `curl` for `/predict`.
+- **CORS** (e.g. static site calling your EC2 IP): `ENABLE_CORS=1` or `--enable-cors`; optional `--cors-origin https://your-site.com`.
+- **Upload limit**: `MAX_UPLOAD_MB` or `--max-upload-mb` (default 25) sets Flask `MAX_CONTENT_LENGTH`.
 
 ### Access from your laptop (recommended: SSH tunnel)
 
@@ -152,6 +156,34 @@ Then open:
 ### Alternative: HTTPS on EC2
 
 If you want to access it directly by public IP/domain, terminate TLS (HTTPS) using a reverse proxy (e.g. Nginx + Let’s Encrypt).
+
+### Optional: Keras HDF5 emotion model (`emotion_model.hdf5`)
+
+If you have a classic Keras FER-style model (input shape `(1, 48, 48, 1)`), place `emotion_model.hdf5` on the server and run:
+
+```bash
+export KERAS_EMOTION_MODEL=/path/to/emotion_model.hdf5
+python app.py --keras-emotion-model "$KERAS_EMOTION_MODEL"
+```
+
+- Full pipeline `/predict` returns extra fields: `keras_emotion`, `keras_emotion_label`, `keras_emotion_confidence`.
+- Standalone JSON endpoint: `POST /predict_keras_emotion` with `{"image_b64": "..."}` (recommended) or `{"image": <nested array>}`.
+
+### Emotion-only microservice (`emotion_server.py`)
+
+Tiny Flask app with **no YOLO and no caption model** — only `emotion_model.hdf5` + `POST /predict`.
+
+Dependencies (minimal): `flask`, `numpy`, `opencv-python-headless`, `tensorflow`.
+
+```bash
+pip install flask numpy opencv-python-headless tensorflow
+python emotion_server.py --model emotion_model.hdf5 --host 0.0.0.0 --port 5001
+# Or: gunicorn -b 0.0.0.0:5001 emotion_wsgi:app
+```
+
+- `GET /` → plain text: `Emotion Detection API Running`
+- `GET /health` → `{"status":"ok","service":"emotion-only"}`
+- `POST /predict` → JSON `{"image_b64":"..."}` or `{"image":[...]}`. Optional `"use_whole_frame": true` to mimic a naive full-frame resize (default uses Haar face crop when possible).
 
 ### Production setup (systemd + Nginx)
 
