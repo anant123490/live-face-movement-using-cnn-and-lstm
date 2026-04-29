@@ -1,0 +1,12 @@
+# SageMaker deployment dependencies (inference/web app)
+numpy
+pandas
+pillow
+torch
+torchvision
+ultralytics
+flask
+fer
+gunicorn
+opencv-python-headless
+boto3

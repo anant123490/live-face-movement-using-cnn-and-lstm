@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Browser Camera Feed</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    .panel {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 12px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    button, select {
+      background: #0b1220;
+      color: #e2e8f0;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    button {
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    video {
+      width: 100%;
+      border-radius: 10px;
+      background: #0b1220;
+      display: block;
+    }
+    img {
+      width: 100%;
+      border-radius: 10px;
+      background: #0b1220;
+      display: block;
+    }
+    .hint {
+      color: #94a3b8;
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 12px;
+      align-items: start;
+    }
+    @media (max-width: 950px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .label {
+      color: #94a3b8;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .value {
+      font-size: 15px;
+      font-weight: 600;
+      word-break: break-word;
+      line-height: 1.35;
+    }
+    .split {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    @media (max-width: 620px) {
+      .split { grid-template-columns: 1fr; }
+    }
+    code {
+      background: #0b1220;
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
+    .error {
+      color: #fca5a5;
+      font-size: 13px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Browser Camera Feed + ML Analysis</h1>
+    <div class="hint">
+      This uses your browser’s webcam, then sends frames to the backend for ML (YOLO + captioning + face emotion + movement/clothes).
+      Browser camera access requires <code>https://</code> or <code>http://localhost</code>. If you opened this with <code>127.0.0.1</code> and the camera won’t start, open
+      <code>http://localhost:5000/</code> instead.
+    </div>
+    <div id="env" class="hint" style="margin-top: 8px"></div>
+    <div style="height: 12px"></div>
+
+    <div class="panel">
+      <div class="row">
+        <div class="controls">
+          <label class="hint" for="cameraSelect">Camera</label>
+          <select id="cameraSelect"></select>
+
+          <label class="hint" for="resolutionSelect">Resolution</label>
+          <select id="resolutionSelect">
+            <option value="640x480">640×480</option>
+            <option value="1280x720" selected>1280×720</option>
+            <option value="1920x1080">1920×1080</option>
+          </select>
+
+          <label class="hint" for="sendSizeSelect">Send size (ML)</label>
+          <select id="sendSizeSelect">
+            <option value="480">480px</option>
+            <option value="640" selected>640px</option>
+            <option value="960">960px</option>
+          </select>
+
+          <label class="hint" for="intervalSelect">Analyze every</label>
+          <select id="intervalSelect">
+            <option value="250">250ms</option>
+            <option value="400" selected>400ms</option>
+            <option value="700">700ms</option>
+            <option value="1000">1000ms</option>
+          </select>
+
+          <label class="hint" style="display:flex; gap:8px; align-items:center;">
+            <input id="accuracyToggle" type="checkbox" />
+            Accuracy mode
+          </label>
+
+          <button id="startBtn">Start</button>
+          <button id="stopBtn" disabled>Stop</button>
+        </div>
+
+        <div class="grid">
+          <div class="kv">
+            <div class="hint">Raw browser camera</div>
+            <video id="video" autoplay playsinline muted></video>
+
+            <div class="hint">Annotated (server ML)</div>
+            <img id="annotated" alt="Annotated feed will appear here" />
+          </div>
+
+          <div class="kv">
+            <div>
+              <div class="label">Detected Objects</div>
+              <div class="value" id="detected">-</div>
+            </div>
+            <div>
+              <div class="label">Generated Caption</div>
+              <div class="value" id="caption">-</div>
+            </div>
+            <div>
+              <div class="label">Movement Summary</div>
+              <div class="value" id="movement">-</div>
+            </div>
+            <div>
+              <div class="label">Surroundings Description</div>
+              <div class="value" id="scene_description">-</div>
+            </div>
+
+            <div class="split">
+              <div>
+                <div class="label">Person Characteristics</div>
+                <div class="value" id="person_characteristics">-</div>
+              </div>
+              <div>
+                <div class="label">Surroundings Characteristics</div>
+                <div class="value" id="surroundings_characteristics">-</div>
+              </div>
+            </div>
+
+            <div>
+              <div class="label">Face + Environment</div>
+              <div class="value" id="face_environment">-</div>
+            </div>
+            <div>
+              <div class="label">Face Emotion</div>
+              <div class="value" id="face_emotion">-</div>
+            </div>
+            <div>
+              <div class="label">NLP Scene Report</div>
+              <div class="value" id="nlp_report">-</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="status" class="hint">Status: idle</div>
+        <div id="error" class="error"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById("video");
+    const cameraSelect = document.getElementById("cameraSelect");
+    const resolutionSelect = document.getElementById("resolutionSelect");
+    const sendSizeSelect = document.getElementById("sendSizeSelect");
+    const intervalSelect = document.getElementById("intervalSelect");
+    const accuracyToggle = document.getElementById("accuracyToggle");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const statusEl = document.getElementById("status");
+    const errorEl = document.getElementById("error");
+    const envEl = document.getElementById("env");
+    const annotatedImg = document.getElementById("annotated");
+
+    const detectedEl = document.getElementById("detected");
+    const captionEl = document.getElementById("caption");
+    const movementEl = document.getElementById("movement");
+    const sceneDescriptionEl = document.getElementById("scene_description");
+    const personEl = document.getElementById("person_characteristics");
+    const surroundingsEl = document.getElementById("surroundings_characteristics");
+    const faceEnvEl = document.getElementById("face_environment");
+    const faceEmotionEl = document.getElementById("face_emotion");
+    const nlpReportEl = document.getElementById("nlp_report");
+
+    let currentStream = null;
+    let analyzeTimer = null;
+    let analyzing = false;
+    const clientId = (crypto?.randomUUID ? crypto.randomUUID() : String(Date.now())) + "-" + Math.random().toString(16).slice(2);
+
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d", { willReadFrequently: false });
+
+    function setStatus(text) {
+      statusEl.textContent = `Status: ${text}`;
+    }
+
+    function setError(text) {
+      errorEl.textContent = text || "";
+    }
+
+    function stopStream() {
+      if (!currentStream) return;
+      for (const track of currentStream.getTracks()) track.stop();
+      currentStream = null;
+      video.srcObject = null;
+      stopBtn.disabled = true;
+      startBtn.disabled = false;
+      setStatus("stopped");
+      stopAnalyzeLoop();
+    }
+
+    function stopAnalyzeLoop() {
+      if (analyzeTimer) {
+        clearInterval(analyzeTimer);
+        analyzeTimer = null;
+      }
+      analyzing = false;
+    }
+
+    async function listCameras() {
+      // Labels are often empty until the user grants permission once.
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === "videoinput");
+      cameraSelect.innerHTML = "";
+      cams.forEach((cam, idx) => {
+        const opt = document.createElement("option");
+        opt.value = cam.deviceId;
+        opt.textContent = cam.label || `Camera ${idx + 1}`;
+        cameraSelect.appendChild(opt);
+      });
+      if (cams.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "No camera found";
+        cameraSelect.appendChild(opt);
+      }
+    }
+
+    function parseResolution(value) {
+      const [w, h] = value.split("x").map(n => parseInt(n, 10));
+      return { width: w, height: h };
+    }
+
+    function coverFit(srcW, srcH, dstW, dstH) {
+      const srcAspect = srcW / srcH;
+      const dstAspect = dstW / dstH;
+      let sWidth, sHeight, sx, sy;
+      if (srcAspect > dstAspect) {
+        sHeight = srcH;
+        sWidth = Math.floor(dstAspect * sHeight);
+        sx = Math.floor((srcW - sWidth) / 2);
+        sy = 0;
+      } else {
+        sWidth = srcW;
+        sHeight = Math.floor(sWidth / dstAspect);
+        sx = 0;
+        sy = Math.floor((srcH - sHeight) / 2);
+      }
+      return { sx, sy, sWidth, sHeight };
+    }
+
+    async function captureAndAnalyzeOnce() {
+      if (!currentStream || analyzing) return;
+      if (video.readyState < 2) return; // need current data
+      analyzing = true;
+
+      try {
+        const sendSize = parseInt(sendSizeSelect.value, 10);
+        const vw = video.videoWidth || 1280;
+        const vh = video.videoHeight || 720;
+        const dstW = sendSize;
+        const dstH = Math.round(sendSize * (9 / 16)); // keep consistent for stable results
+
+        canvas.width = dstW;
+        canvas.height = dstH;
+        const { sx, sy, sWidth, sHeight } = coverFit(vw, vh, dstW, dstH);
+        ctx.drawImage(video, sx, sy, sWidth, sHeight, 0, 0, dstW, dstH);
+
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.82));
+        if (!blob) return;
+
+        const fd = new FormData();
+        fd.append("frame", blob, "frame.jpg");
+
+        const t0 = performance.now();
+        const accuracyParam = accuracyToggle && accuracyToggle.checked ? "&accuracy=1" : "";
+        const resp = await fetch(`/predict?client_id=${encodeURIComponent(clientId)}${accuracyParam}`, {
+          method: "POST",
+          body: fd
+        });
+        const t1 = performance.now();
+
+        const rawText = await resp.text();
+        let data = null;
+        try {
+          data = rawText ? JSON.parse(rawText) : {};
+        } catch {
+          data = null;
+        }
+
+        if (!resp.ok) {
+          const serverErr = data && data.error ? data.error : rawText;
+          throw new Error(`HTTP ${resp.status} ${resp.statusText}${serverErr ? `\n${serverErr}` : ""}`);
+        }
+        if (!data) {
+          throw new Error("Server returned non-JSON response.");
+        }
+
+        if (data.annotated_jpeg_base64) {
+          annotatedImg.src = `data:image/jpeg;base64,${data.annotated_jpeg_base64}`;
+        }
+
+        detectedEl.textContent = data.detected || "-";
+        captionEl.textContent = data.caption || "-";
+        movementEl.textContent = data.movement || "-";
+        sceneDescriptionEl.textContent = data.scene_description || "-";
+        personEl.textContent = data.person_characteristics || "-";
+        surroundingsEl.textContent = data.surroundings_characteristics || "-";
+        faceEnvEl.textContent = data.face_environment || "-";
+        faceEmotionEl.textContent = data.face_emotion || "-";
+        nlpReportEl.textContent = data.nlp_report || "-";
+
+        setStatus(`live (analyze ${(t1 - t0).toFixed(0)}ms)`);
+      } catch (err) {
+        setStatus("error");
+        setError(String(err && err.message ? err.message : err));
+      } finally {
+        analyzing = false;
+      }
+    }
+
+    function startAnalyzeLoop() {
+      stopAnalyzeLoop();
+      const intervalMs = parseInt(intervalSelect.value, 10);
+      analyzeTimer = setInterval(captureAndAnalyzeOnce, intervalMs);
+      captureAndAnalyzeOnce();
+    }
+
+    async function startStream() {
+      setError("");
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError("getUserMedia is not supported in this browser.");
+        return;
+      }
+
+      stopStream();
+
+      const { width, height } = parseResolution(resolutionSelect.value);
+      const deviceId = cameraSelect.value || undefined;
+
+      try {
+        setStatus("requesting permission...");
+        const constraints = {
+          audio: false,
+          video: {
+            deviceId: deviceId ? { exact: deviceId } : undefined,
+            width: { ideal: width },
+            height: { ideal: height }
+          }
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        currentStream = stream;
+        video.srcObject = stream;
+
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        setStatus("live");
+
+        await listCameras(); // refresh labels after permission grant
+        startAnalyzeLoop();
+      } catch (err) {
+        setStatus("error");
+        const name = err && err.name ? err.name : "Error";
+        const message = err && err.message ? err.message : String(err);
+        setError(`${name}: ${message}`);
+      }
+    }
+
+    startBtn.addEventListener("click", startStream);
+    stopBtn.addEventListener("click", stopStream);
+
+    resolutionSelect.addEventListener("change", async () => {
+      if (currentStream) await startStream();
+    });
+    cameraSelect.addEventListener("change", async () => {
+      if (currentStream) await startStream();
+    });
+    sendSizeSelect.addEventListener("change", () => {
+      if (currentStream) startAnalyzeLoop();
+    });
+    intervalSelect.addEventListener("change", () => {
+      if (currentStream) startAnalyzeLoop();
+    });
+    accuracyToggle.addEventListener("change", () => {
+      if (currentStream) captureAndAnalyzeOnce();
+    });
+
+    (async () => {
+      try {
+        setStatus("ready");
+        envEl.textContent =
+          `Origin: ${location.origin} | Secure context: ${window.isSecureContext ? "yes" : "no"} | ` +
+          `mediaDevices: ${navigator.mediaDevices ? "yes" : "no"}`;
+
+        if (!window.isSecureContext && location.hostname !== "localhost") {
+          setError(
+            "Camera blocked by browser security. Open this page as http://localhost:5000/ (or use HTTPS)."
+          );
+        }
+        await listCameras();
+      } catch (err) {
+        setStatus("error");
+        setError(String(err && err.message ? err.message : err));
+      }
+    })();
+  </script>
+</body>
+</html>
+

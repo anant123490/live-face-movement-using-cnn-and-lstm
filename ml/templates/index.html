@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Camera Captioning</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+    h1 {
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      color: #94a3b8;
+      margin-bottom: 16px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 16px;
+    }
+    .panel {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+    img {
+      width: 100%;
+      border-radius: 8px;
+      display: block;
+    }
+    .label {
+      color: #94a3b8;
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    .value {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 8px 0 16px;
+      word-break: break-word;
+    }
+    code {
+      background: #0b1220;
+      border-radius: 6px;
+      padding: 2px 6px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Live Camera Captioning Website</h1>
+    <div class="subtitle">Flask + NLP + LSTM + YOLO object detection</div>
+
+    <div class="grid">
+      <div class="panel">
+        <img src="/video_feed" alt="Live camera feed">
+      </div>
+      <div class="panel">
+        <div class="label">Detected Objects</div>
+        <div class="value" id="detected">loading...</div>
+
+        <div class="label">Generated Caption</div>
+        <div class="value" id="caption">loading...</div>
+
+        <div class="label">Movement Summary</div>
+        <div class="value" id="movement">loading...</div>
+
+        <div class="label">Surroundings Description</div>
+        <div class="value" id="scene_description">loading...</div>
+
+        <div class="label">Person Characteristics</div>
+        <div class="value" id="person_characteristics">loading...</div>
+
+        <div class="label">Surroundings Characteristics</div>
+        <div class="value" id="surroundings_characteristics">loading...</div>
+
+        <div class="label">Face + Environment</div>
+        <div class="value" id="face_environment">loading...</div>
+
+        <div class="label">Face Emotion</div>
+        <div class="value" id="face_emotion">loading...</div>
+
+        <div class="label">NLP Scene Report</div>
+        <div class="value" id="nlp_report">loading...</div>
+
+        <div class="label">API Endpoint</div>
+        <div class="value"><code>/caption</code></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function refreshCaption() {
+      try {
+        const response = await fetch("/caption");
+        const data = await response.json();
+        document.getElementById("detected").textContent = data.detected || "none";
+        document.getElementById("caption").textContent = data.caption || "no caption";
+        document.getElementById("movement").textContent = data.movement || "none";
+        document.getElementById("scene_description").textContent = data.scene_description || "no details";
+        document.getElementById("person_characteristics").textContent = data.person_characteristics || "no person details";
+        document.getElementById("surroundings_characteristics").textContent = data.surroundings_characteristics || "no surroundings details";
+        document.getElementById("face_environment").textContent = data.face_environment || "no face/environment details";
+        document.getElementById("face_emotion").textContent = data.face_emotion || "no face emotion details";
+        document.getElementById("nlp_report").textContent = data.nlp_report || "no nlp report";
+      } catch (err) {
+        document.getElementById("caption").textContent = "caption service unavailable";
+        document.getElementById("movement").textContent = "caption service unavailable";
+        document.getElementById("scene_description").textContent = "caption service unavailable";
+        document.getElementById("person_characteristics").textContent = "caption service unavailable";
+        document.getElementById("surroundings_characteristics").textContent = "caption service unavailable";
+        document.getElementById("face_environment").textContent = "caption service unavailable";
+        document.getElementById("face_emotion").textContent = "caption service unavailable";
+        document.getElementById("nlp_report").textContent = "caption service unavailable";
+      }
+    }
+
+    refreshCaption();
+    setInterval(refreshCaption, 900);
+  </script>
+</body>
+</html>

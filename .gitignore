@@ -1,0 +1,17 @@
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Local artifacts / large files
+ml/artifacts/
+ml/data/sample_images/
+ml/yolov8*.pt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+

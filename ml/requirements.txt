@@ -1,0 +1,14 @@
+numpy
+pandas
+opencv-python-headless
+pillow
+torch
+torchvision
+ultralytics
+lap>=0.5.12
+tqdm
+streamlit
+flask
+fer
+boto3
+gunicorn
